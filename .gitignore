@@ -1,0 +1,11 @@
+venv
+.idea
+test
+*.log
+**/__pycache__
+.vscode
+dataset
+choices/**/*.npy
+records/**/*.npy
+test.ipynb
+train_params.py
