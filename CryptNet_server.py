@@ -5,14 +5,12 @@ import pickle
 import torch.nn as nn
 from model_paras_count.pre_process import *
 from model_paras_count.count import *
-from network.rbphe_network import ObRBPHENetwork
-from network.plain_network import PlainNetwork
+from network.plain_network import *
+from network.batchcrypt import BatchCrypt
 from socket import socket, AF_INET, SOCK_STREAM
 from train_params import *
-import argparse
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-import os
 import math
 import time
 import logging
@@ -27,13 +25,7 @@ def server_func():
     logging.debug("Debug mode")
 
     """ Init public key """
-    lg_max_add = max(6, math.ceil(math.log2(CLIENT_NUM)))
-    if BACKEND == "obrbphe":
-        model = ObRBPHENetwork(PRECISION, key_size=KEY_SIZE, lg_max_add=lg_max_add,
-                               sec_param=SECURITY)
-    else:
-        model = PlainNetwork()
-        
+    model = PlainNetwork(encry_method=BACKEND)
     encryptor = model.encryptor
 
     """ Init socket """
@@ -51,12 +43,9 @@ def server_func():
         conn, address = ServerSocket.accept()
         conn_id = pickle.loads(conn.recv(BUFF_SIZE))
         connections[conn_id] = conn
-        #print(conn_id,connections[conn_id])
         conn.send(sendData)
     
     """** Local Anchors **"""
-    #if not os.path.exists(LOCAL_ANCHORS_PATH):
-    #    os.makedirs(LOCAL_ANCHORS_PATH)
 
     logging.debug("init success")
     logging.info("Params: MODE:{} CLIENTS:{} K:{} SPARSE:{} DATASET:{}".\
@@ -73,18 +62,16 @@ def server_func():
             '''recv switch from leader and broadcast'''
             # recv switch info from leader
             protocol_switch = pickle.loads(leader_conn.recv(BUFF_SIZE))
+
             #leader_conn.send(pickle.dumps(COMP_MSG))
             logging.debug("receive switch from leader")
-
             time.sleep(0.5)
+
             # broadcast switch info to clients
             for i in range(1,CLIENT_NUM):
                 conn = connections[i]
-                #print(i,conn)
                 conn.send(pickle.dumps(protocol_switch))
-                #resp = conn.recv(BUFF_SIZE)
-                #if pickle.loads(resp) != COMP_MSG:
-                #    raise ValueError("receive unrecognized message!") 
+
             logging.debug("broadcast switch")
             #time.sleep(0.8)
 
@@ -106,12 +93,10 @@ def server_func():
                         hash_list = hashs
                     else:
                         hash_list = np.vstack((hash_list,hashs))
-                    #conn.send(pickle.dumps(COMP_MSG))
                     
                 logging.debug("receive clients' hash list")
 
                 # Model Paras Count
-                # add restore mask 2022.4.26
                 hash_list = hash_list.T
                 alloc,selected,sparse_index = pick_represents(hash_list,K,SPARSE,ENCRYPT_BATCHSIZE)
                 alloc_num = len(alloc.keys())
@@ -126,7 +111,6 @@ def server_func():
                     selected_index += alloc[c]
                     selected_freq[c] = len(alloc[c])
                 print([(key,len(selected_info[key]['index'])) for key in selected_info.keys()])
-                #logging.debug([(key,len(selected_info[key]['index'])) for key in selected_info.keys()])
                 selected_index += sparse_index
                 restore_mask = np.argsort(np.array(selected_index))
                 selected_vec = one_hot(selected,CLIENT_NUM)
@@ -196,9 +180,6 @@ def server_func():
                         if pickle.loads(resp) != READY_MSG:
                             raise ValueError("receive unrecognized message!")
                         conn.send(sendData)
-                        #resp = conn.recv(BUFF_SIZE)
-                        #if pickle.loads(resp) != COMP_MSG:
-                        #    raise ValueError("receive unrecognized message!")
                     logging.debug("send global anchors & residues to clients")   
                 else:
                     logging.debug("switch back to protocol 1 in epoch {} step {}".format(epoch,b))
@@ -219,11 +200,9 @@ def server_func():
                         agg_grad = np.array(grads)
                     else:
                         agg_grad += np.array(grads)
-                    #conn.send(pickle.dumps(COMP_MSG))
                 logging.debug("receive local gradients from clients")
 
                 # send global encrypted gradients
-                #time.sleep(0.1)
                 sendData = pickle.dumps(agg_grad)
                 remain = len(sendData)
                 for i in range(CLIENT_NUM):
@@ -233,15 +212,10 @@ def server_func():
                     if pickle.loads(resp) != READY_MSG:
                         raise ValueError("receive unrecognized message!")
                     conn.send(sendData)
-                    #resp = conn.recv(BUFF_SIZE)
-                    #if pickle.loads(resp) != COMP_MSG:
-                    #    raise ValueError("receive unrecognized message!") 
                 logging.debug("send global gradients to clients")
             else:
                 print('unknown protocol!')
                 assert 0
 
-if __name__ == "__main__":
-    server_func()
 
 

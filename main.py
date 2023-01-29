@@ -1,10 +1,8 @@
 import CryptNet_client
-import CryptNet_leader
 import CryptNet_server
 from train_params import *
 from load_data import mk_dirs
 from multiprocessing import Process, set_start_method
-#from sendmail.sendqq import *
 import time
 import os
 
@@ -17,10 +15,7 @@ if __name__ == "__main__":
     p_server.start()
     process_list.append(p_server)
     time.sleep(2)
-    #p_leader = Process(target=CryptNet_leader.leader_func, args=())
-    #p_leader.start()
-    #process_list.append(p_leader)
-    #time.sleep(2)
+
     for i in range(CLIENT_NUM):
         p = Process(target=CryptNet_client.client_func, args=(i, ))
         p.start()

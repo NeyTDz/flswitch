@@ -8,14 +8,11 @@ import torch.nn as nn
 from model_paras_count.pre_process import *
 from model_paras_count.count import *
 from model_paras_count.PerfectHash import *
-from network.rbphe_network import ObRBPHENetwork
 from network.plain_network import PlainNetwork
 from socket import socket, AF_INET, SOCK_STREAM
 from train_params import *
 from switch.switch_network import *
 from switch.switch_utils import *
-#from sendmail.sendqq import *
-import argparse
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from load_data import load_dataset,sep_dataset
@@ -23,7 +20,6 @@ import math
 import time
 import numpy as np
 import random
-from rbphe.obfusacted_residue_cryptosystem import ObfuscatedRBPHE
 
 device = torch.device(DEVICE)
 
@@ -86,18 +82,13 @@ def client_func(client_idx):
     """ Request public key """
     recvData = tcp_client_socket_server.recv(BUFF_SIZE)
     encryptor = pickle.loads(recvData)
-    if BACKEND == "obrbphe":
-        model = ObRBPHENetwork(PRECISION, key_size=KEY_SIZE, lg_max_add=lg_max_add,\
-                               sec_param=SECURITY, encryptor=encryptor).to(device)
-    else:
-        model = PlainNetwork(encryptor=encryptor).to(device)
+    model = PlainNetwork(encry_method=BACKEND, encryptor=encryptor).to(device)
 
     """ Switch model """
     if SWITCH_MODE == 'pred' and client_idx == 0:
         switch_model = PredictionNet().to(device)
         switch_model.load_state_dict(torch.load(SWITCH_MODEL_PATH,map_location=device))
         switch_model.to(device)
-    #switch_model = torch.load(SWITCH_MODEL_PATH,map_location=device)
     
     """ Hash Func """
     hash_scale = 10**(2+POWER_CHOICE[1])
@@ -123,7 +114,7 @@ def client_func(client_idx):
     for epoch in range(EPOCH):
         epoch_waste = []
         for step, (data, targets) in enumerate(train_loader):
-            logging.debug("epoch: {} batch seq: {},{}".format(epoch,step,batch_num))
+            logging.debug("epoch: {} batch seq: {}-{}".format(epoch,batch_num,step))
             optim.zero_grad()
             data = data.to(device)
             targets = targets.to(device)
@@ -171,31 +162,19 @@ def client_func(client_idx):
                     assert 0
 
                 sendSignal = pickle.dumps(protocol_switch)
-                tcp_leader_socket_server.send(sendSignal)
-                #resp = tcp_leader_socket_server.recv(BUFF_SIZE)
-                #if pickle.loads(resp) != COMP_MSG:
-                #    raise ValueError("receive unrecognized message!") 
-                
+                tcp_leader_socket_server.send(sendSignal)                
                 
             else: # not leader
-                #time.sleep(0.1)
                 resp = tcp_client_socket_server.recv(BUFF_SIZE)
-                #tcp_client_socket_server.send(pickle.dumps(COMP_MSG))
                 protocol_switch = pickle.loads(resp)
                 logging.debug("batch seq: {} protocol: {}".format(step,protocol_switch))
+
             '''trans process''' 
             if PARASCOUNT and protocol_switch == '2':
                 # send hash of anchors
                 raw_grads = model.get_raw_grads()
                 anchors, residues, stand_power = sep_anch_resd(raw_grads,POWER_CHOICE)
                 hashs = generate_hashlist(anchors,perfect_hash)
-                '''
-                encode_hashs = []
-                obf = ObfuscatedRBPHE()
-                for i in range(math.ceil(len(hashs)/ENCRYPT_BATCHSIZE)):
-                    ent = obf.encoder.encode(hashs[i*ENCRYPT_BATCHSIZE:(i+1)*ENCRYPT_BATCHSIZE])
-                    encode_hashs.append(ent)
-                '''
                 sendData = pickle.dumps(hashs)
                 remain = len(sendData)
                 logging.debug("encode hashs complete, endoce size:{}".format(remain))
@@ -203,10 +182,7 @@ def client_func(client_idx):
                 resp = tcp_client_socket_server.recv(BUFF_SIZE)
                 if pickle.loads(resp) != READY_MSG:
                     raise ValueError("receive unrecognized message!")
-                tcp_client_socket_server.send(sendData)
-                #resp = tcp_client_socket_server.recv(BUFF_SIZE)
-                #if pickle.loads(resp) != COMP_MSG:
-                #    raise ValueError("receive unrecognized message!")                
+                tcp_client_socket_server.send(sendData)              
                 logging.debug("send hash of anchors to server. stand power:{}".format(stand_power))
 
                 # receive indexs and send anchors&residues
@@ -219,21 +195,16 @@ def client_func(client_idx):
                     remain -= len(each_data)
                     recvData += each_data
                 alloc_info = pickle.loads(recvData)
-                #tcp_client_socket_server.send(pickle.dumps(COMP_MSG))
 
                 switch_back = alloc_info['switch_back']
                 remask = alloc_info['remask']
                 sparse_index = alloc_info['sparse']
                 if not switch_back:
                     if alloc_info['selected']:
-                        #st = time.perf_counter()
                         # alloc
                         selected_info = alloc_info['selected_info']
                         anchors = anchors.reshape(len(anchors))
                         residues = residues.reshape(len(residues))
-                        #local_anchors = {'epoch':epoch,'step':step,'client':client_idx,'top_anch':top_tiny(anchors,10)}
-                        #local_anch_records.append(local_anchors)
-                        #np.save(LOCAL_ANCHORS_PATH+'client'+str(client_idx)+'.npy',local_anch_records,allow_pickle=True)
                         if not MASK:
                             plain_anchors = np.zeros(len(anchors))
                             plain_anchors[selected_info['index']] = anchors[selected_info['index']]
@@ -250,13 +221,8 @@ def client_func(client_idx):
                         resp = tcp_client_socket_server.recv(BUFF_SIZE)
                         if pickle.loads(resp) != READY_MSG:
                             raise ValueError("receive unrecognized message!")
-                        tcp_client_socket_server.send(sendData)
-                        #resp = tcp_client_socket_server.recv(BUFF_SIZE)
-                        #if pickle.loads(resp) != COMP_MSG:
-                        #    raise ValueError("receive unrecognized message!")                    
+                        tcp_client_socket_server.send(sendData)                  
                         logging.debug("send local anchors&residues to server")
-                        #et = time.perf_counter()
-                        #print('alloc time',et-st)
                     else:
                         logging.debug("not selected this turn")
                                             
@@ -288,19 +254,15 @@ def client_func(client_idx):
                     flat_grad = model.get_raw_grads()
                     sendData = pickle.dumps(flat_grad)
                 else:
-                    pack_grads, pack_size = model.pack_grad(return_size=True,return_waste=WASTE)
-                    logging.debug("encryption complete, pack_size:{}".format(pack_size))
-                    #print('pk',pack_size)
-                    sendData = pickle.dumps(pack_grads)
+                    packed_grads, packed_size = model.pack_grad(return_size=True)
+                    logging.debug("encryption complete, pack_size:{}".format(packed_size))
+                    sendData = pickle.dumps(packed_grads)
                 remain = len(sendData)
                 tcp_client_socket_server.send(pickle.dumps(remain))
                 resp = tcp_client_socket_server.recv(BUFF_SIZE)
                 if pickle.loads(resp) != READY_MSG:
                     raise ValueError("receive unrecognized message!")
-                tcp_client_socket_server.send(sendData)
-                #resp = tcp_client_socket_server.recv(BUFF_SIZE)
-                #if pickle.loads(resp) != COMP_MSG:
-                #    raise ValueError("receive unrecognized message!")                
+                tcp_client_socket_server.send(sendData)              
                 logging.debug("send local gradients to server")
                 # receive global encrypted gradients
                 grad_len = pickle.loads(tcp_client_socket_server.recv(BUFF_SIZE))
@@ -317,7 +279,7 @@ def client_func(client_idx):
                     grad_dict = model.plain_grad_process(plain_gradients)
                 else:
                     enc_gradients = pickle.loads(recvData)
-                    grad_dict = model.unpack_grad(enc_gradients)
+                    grad_dict = model.unpack_grad(enc_gradients,packed_size)
                     logging.debug("decryption complete")
                 
                 
@@ -332,7 +294,6 @@ def client_func(client_idx):
             if SWITCH_MODE == "pred":
             #if True:
                 if client_idx == 0:
-                    #st = time.perf_counter()
                     batch_loss,batch_acc = model.test(test_loader,lossf)
                     if epoch == 0:
                         if step == 0:
@@ -345,11 +306,7 @@ def client_func(client_idx):
                         last_mean_acc,last_mean_loss = pre_records[curr_index-1][4],pre_records[curr_index-1][5]
                         delta_acc,delta_loss = mean_acc-last_mean_acc,mean_loss-last_mean_loss
                         pre_records = np.vstack((pre_records,np.array([epoch,step,batch_acc,batch_loss,mean_acc,mean_loss,delta_acc,delta_loss])))
-                    np.save(PRE_RECORDS_PATH,pre_records)
-                    #global_params.append(grad_dict)
-                    #np.save(PRE_PARAMS_PATH,global_params)
-                    #et = time.perf_counter()
-                    #print('one shot',et-st)   
+                    np.save(PRE_RECORDS_PATH,pre_records) 
                     if step % 10 == 0 and step < 20: #show acc in testset
                         acc_records.append([epoch,step,batch_loss,batch_acc,int(protocol_switch)])
                         np.save(ACC_RECORDS_PATH,acc_records)
@@ -372,30 +329,6 @@ def client_func(client_idx):
             epoch_loss,epoch_acc = model.test(test_loader,lossf)
             print("client {}, epoch: {}, loss: {}, acc: {}".format(client_idx, epoch, epoch_loss, epoch_acc))
             logging.info("---------- epoch: {}, loss: {}, acc: {} ----------".format(epoch, epoch_loss, epoch_acc))
-        # waste
-        #print("client {}, Mean waste:{}".format(client_idx, sum(epoch_waste)/len(epoch_waste)))
-        #all_waste.append(epoch_waste)
-        #logging.info("Mean waste:{}",format(epoch_waste))
-        #for name, parameters in model.named_parameters():
-        #    logging.debug("name: {}, size: {}, weights: {}".format(name, parameters.size(), parameters.flatten()[:5]))
-        #logging.info("--------------------------------------------------")
-
     tcp_client_socket_server.close()
 
-    '''
-    if SAVE_MODEL and client_idx == 0 and not switch_1_2:
-        print('end accuracy:',acc)
-        model.save_model(SAVE_MODEL_PATH)
-    '''
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--index", type=int, help="client index, from 0 to CLIENT_NUM-1")
-    args = parser.parse_args()
-    if args.index >= CLIENT_NUM or args.index < 0:
-        raise ValueError("Invalid client index")
-
-    client_idx = args.index
-    client_func(client_idx)
 

@@ -19,7 +19,6 @@ class BatchCryptEncoder(object):
         if len(values) != self.batch_size:
             warnings.warn("length of values is not equal to batch size!")
             if len(values) < self.batch_size:
-                #print("waste:",self.batch_size-len(values))
                 values = np.concatenate((values, [0]*(self.batch_size - len(values))))
             else:
                 values = values[:self.batch_size]
@@ -60,11 +59,11 @@ class BatchCryptEncoder(object):
         elif sign == 7:  # negtive value, 0111
             return two_comp_lit_to_ori(literal, bit_width)
         elif sign == 6:  # negtive overflow, 0110
-            print('neg overflow: ' + str(two_comp))
+            #print('neg overflow: ' + str(two_comp))
             return - (pow(2, bit_width - 1) - 1)
         else:  # unrecognized overflow
-            print('unrecognized overflow: ' + str(two_comp))
-            warnings.warn('Overflow detected, consider using longer r_max')
+            #print('unrecognized overflow: ' + str(two_comp))
+            #warnings.warn('Overflow detected, consider using longer r_max')
             return - (pow(2, bit_width - 1) - 1)
 
     def decode(self, encode_value):
@@ -83,17 +82,22 @@ class BatchCryptEncoder(object):
 
 
 class BatchCrypt(object):
-    def __init__(self, precision=8, clipping=0.5, batch_size="auto", padding=3, add_max=2, key_size=2048,
+    def __init__(self, precision=8, clipping=1.0, batch_size="auto", padding=3, add_max=10, key_size=2048,
                  encryptor=None):
         if batch_size == "auto":
             self.batch_size = self.gen_batch_size(add_max, precision, padding, key_size)
         else:
             self.batch_size = batch_size
-        self.encoder = BatchCryptEncoder(precision, clipping, self.batch_size, padding, add_max)
         if encryptor:
-            self.cipher = encryptor
+            self.encoder = encryptor[0]
+            self.cipher = encryptor[1]
         else:
+            self.encoder = self.encoder = BatchCryptEncoder(precision, clipping, self.batch_size, padding, add_max)
             self.cipher = CPaillier.generate(key_size)
+    
+    @property
+    def encryptor(self):
+        return self.encoder, self.cipher
 
     @staticmethod
     def gen_batch_size(add_max, precision, padding, key_size):
@@ -111,24 +115,3 @@ class BatchCrypt(object):
         values = self.encoder.decode(plain)
         return values
 
-
-if __name__ == "__main__":
-    from timeit import default_timer as timer
-    N = 65536
-    encryptor = CPaillier.generate(2048)
-    cipher = BatchCrypt(precision=8, add_max=10, clipping=1.0)
-    print(cipher.batch_size)
-    enc_total = 0
-    dec_total = 0
-    for _ in range(math.ceil(N/cipher.batch_size)):
-        A = np.random.uniform(-0.5, 0.5, cipher.batch_size)
-        enc_begin = timer()
-        ct = cipher.encrypt(A)
-        enc_end = timer()
-        dec_begin = timer()
-        values = cipher.decrypt(ct)
-        dec_end = timer()
-        enc_total += (enc_end - enc_begin)
-        dec_total += (dec_end - dec_begin)
-    print(enc_total)
-    print(dec_total)

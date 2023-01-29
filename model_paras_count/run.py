@@ -29,11 +29,6 @@ if __name__ == "__main__":
         all_costs.append(costs)
     all_costs = np.array(all_costs)
     print(all_costs)
-    #plot(all_costs,batches,sparse_bound)
-    '''
-    print("########## Optimized Result ##########")
-    min_index = np.argmin(costs)
-    print("Top {} clients, cost: {}".format(min_index+1,costs[min_index]))
-    '''
+
 
 
